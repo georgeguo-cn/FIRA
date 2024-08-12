@@ -38,11 +38,11 @@ class FIMRec(GeneralRecommender):
 
         if self.v_feat is not None:
             self.image_embedding = nn.Embedding.from_pretrained(self.v_feat, freeze=True)
-            self.disen_v = nn.Parameter(nn.init.xavier_uniform_(torch.zeros([self.n_aspects, self.v_feat.shape[1]-self.n_aspects*self.t_interval, self.embedding_dim])))
+            self.disen_v = nn.Parameter(nn.init.xavier_uniform_(torch.zeros([self.n_aspects, self.v_feat.shape[1]-(self.n_aspects-1)*self.t_interval, self.embedding_dim])))
             self.item_v_weight = nn.Parameter(nn.init.xavier_normal_(torch.tensor(np.random.randn(self.n_items, self.n_aspects, 1), dtype=torch.float32, requires_grad=True)))
         if self.t_feat is not None:
             self.text_embedding = nn.Embedding.from_pretrained(self.t_feat, freeze=True)
-            self.disen_t = nn.Parameter(nn.init.xavier_uniform_(torch.zeros([self.n_aspects, self.t_feat.shape[1]-self.n_aspects*self.t_interval, self.embedding_dim])))
+            self.disen_t = nn.Parameter(nn.init.xavier_uniform_(torch.zeros([self.n_aspects, self.t_feat.shape[1]-(self.n_aspects-1)*self.t_interval, self.embedding_dim])))
             self.item_t_weight = nn.Parameter(nn.init.xavier_normal_(torch.tensor(np.random.randn(self.n_items, self.n_aspects, 1), dtype=torch.float32, requires_grad=True)))
         
         if self.mm_fuse_type == 'att':
@@ -128,7 +128,7 @@ class FIMRec(GeneralRecommender):
     def trans_windows(self, ori_feats):
         new_feats = []
         for f in range(self.n_aspects):
-            new_feats.append(ori_feats[:,0+f*self.t_interval:-1*self.n_aspects+f*self.t_interval])
+            new_feats.append(ori_feats[:,f*self.t_interval:ori_feats.shape[1]-(self.n_aspects-1-f)*self.t_interval])
         new_feats = torch.stack(new_feats, dim=1)
         return new_feats
     
