@@ -1,5 +1,5 @@
 # coding: utf-8
-
+import os
 import numpy as np
 import scipy.sparse as sp
 import torch
@@ -20,9 +20,10 @@ class FIMRec(GeneralRecommender):
         self.n_aspects = config['n_aspects']
         self.c_weight = config['c_weight']
         self.reg_weight = config['reg_weight']
+        self.uia_weight = config['uia_weight']
         self.mm_fuse_type = config['mm_fuse_type']
-        self.t_interval = 1
-
+        self.t_interval = config['t_interval']
+ 
         self.n_nodes = self.n_users + self.n_items
         # load dataset info
         self.interaction_matrix = dataset.inter_matrix(form='coo').astype(np.float32)
@@ -36,21 +37,39 @@ class FIMRec(GeneralRecommender):
         nn.init.xavier_uniform_(self.user_embedding.weight)
         nn.init.xavier_uniform_(self.item_id_embedding.weight)
 
+        dataset_path = os.path.abspath(config['data_path'] + config['dataset'])
+        img_adjs_file = os.path.join(dataset_path, config['dataset']+'-img_adjs0.pt')
+        txt_adjs_file = os.path.join(dataset_path, config['dataset']+'-txt_adjs0.pt')
+
+        self.img_adjs = None
+        self.txt_adjs = None
+        self.t_v_att = None
         if self.v_feat is not None:
             self.image_embedding = nn.Embedding.from_pretrained(self.v_feat, freeze=True)
-            self.disen_v = nn.Parameter(nn.init.xavier_uniform_(torch.zeros([self.n_aspects, self.v_feat.shape[1]-(self.n_aspects-1)*self.t_interval, self.embedding_dim])))
+            if os.path.exists(img_adjs_file):
+                self.img_adjs = torch.load(img_adjs_file)
+            else:
+                if self.v_feat.shape[1] <= (self.n_aspects-1)*self.t_interval:
+                    raise RuntimeError('self.t_interval is too large for image features')
+                self.disen_v = nn.Parameter(nn.init.xavier_uniform_(torch.zeros([self.n_aspects, self.v_feat.shape[1]-(self.n_aspects-1)*self.t_interval, self.embedding_dim])))
             self.item_v_weight = nn.Parameter(nn.init.xavier_normal_(torch.tensor(np.random.randn(self.n_items, self.n_aspects, 1), dtype=torch.float32, requires_grad=True)))
         if self.t_feat is not None:
             self.text_embedding = nn.Embedding.from_pretrained(self.t_feat, freeze=True)
-            self.disen_t = nn.Parameter(nn.init.xavier_uniform_(torch.zeros([self.n_aspects, self.t_feat.shape[1]-(self.n_aspects-1)*self.t_interval, self.embedding_dim])))
+            if os.path.exists(txt_adjs_file):
+                self.txt_adjs = torch.load(txt_adjs_file)
+            else:
+                if self.t_feat.shape[1] <= (self.n_aspects-1)*self.t_interval:
+                    raise RuntimeError('self.t_interval is too large for text features')
+                self.disen_t = nn.Parameter(nn.init.xavier_uniform_(torch.zeros([self.n_aspects, self.t_feat.shape[1]-(self.n_aspects-1)*self.t_interval, self.embedding_dim])))
             self.item_t_weight = nn.Parameter(nn.init.xavier_normal_(torch.tensor(np.random.randn(self.n_items, self.n_aspects, 1), dtype=torch.float32, requires_grad=True)))
         
         if self.mm_fuse_type == 'att':
             self.i_m_weight = nn.Parameter(nn.init.xavier_normal_(torch.tensor(np.random.randn(1,2), dtype=torch.float32, requires_grad=True)))
-
-        self.t_ms_adjs = None
-        self.v_ms_adjs = None
-        self.t_v_att = None  
+              
+    def pre_epoch_processing(self):
+        self.img_adjs = None
+        self.txt_adjs = None
+        pass
             
     def scipy_matrix_to_sparse_tenser(self, matrix, shape):
         row = matrix.row
@@ -88,17 +107,22 @@ class FIMRec(GeneralRecommender):
         indices0 = torch.unsqueeze(indices0, 1)
         indices0 = indices0.expand(-1, self.knn_k)
         indices = torch.stack((torch.flatten(indices0), torch.flatten(knn_ind)), 0)
-        # norm
-        return self.compute_normalized_laplacian(indices, adj_size)
-    
-    def compute_normalized_laplacian(self, indices, adj_size):
         adj = torch.sparse.FloatTensor(indices, torch.ones_like(indices[0]), adj_size)
+        # adj = torch.sparse.FloatTensor(indices, knn_value.flatten(), adj_size)
+        # norm
+        return self.compute_normalized_laplacian(adj)
+    
+    def compute_normalized_laplacian(self, adj):
+        # adj = torch.sparse.FloatTensor(indices, torch.ones_like(indices[0]), adj_size)
+        indices = adj.coalesce().indices()
+        values = adj.coalesce().values()
         row_sum = torch.sparse.sum(adj, -1).to_dense()
         r_inv_sqrt = torch.pow(row_sum, -0.5)
+        r_inv_sqrt.masked_fill_(r_inv_sqrt == float('inf'), 0.)
         rows_inv_sqrt = r_inv_sqrt[indices[0]]
         cols_inv_sqrt = r_inv_sqrt[indices[1]]
         values = rows_inv_sqrt * cols_inv_sqrt
-        return torch.sparse.FloatTensor(indices, values, adj_size)
+        return torch.sparse.FloatTensor(indices, values, adj.shape)
     
     def bpr_loss(self, users, pos_items, neg_items):
         pos_scores = torch.sum(torch.mul(users, pos_items), dim=1)
@@ -149,6 +173,11 @@ class FIMRec(GeneralRecommender):
             u_g_embeddings, i_g_embeddings = torch.split(all_embeddings, [self.n_users, self.n_items], dim=0)
         return u_g_embeddings, i_g_embeddings
     
+    def get_mm_embs(self, mm_adj, i_m_embs):
+        for _ in range(self.n_mm_layers):
+            i_m_embs= torch.sparse.mm(mm_adj, i_m_embs)
+        return i_m_embs
+    
     def forward(self):
         # collaborative graph enbedding
         u_g_embeddings, i_g_embeddings = self.get_collabrative_graph_embs()
@@ -156,40 +185,50 @@ class FIMRec(GeneralRecommender):
         # Intra-modal Multi-relation Learning
         if self.t_feat is not None: 
             # local semantic extraction
-            t_feats_chunks = torch.matmul(self.trans_windows(self.text_embedding.weight).permute(1, 0, 2), self.disen_t)
+            if self.txt_adjs is None:
+                print('****************construct text adj********************')
+                t_feats_chunks = torch.matmul(self.trans_windows(self.text_embedding.weight).permute(1, 0, 2), self.disen_t)
+                # t_feats_chunks = self.trans_windows(self.text_embedding.weight).permute(1, 0, 2)
+                t_adjs = []
+                # multi-relation graph learning
+                with torch.no_grad():
+                    for i in range(self.n_aspects):
+                        c_adj = self.get_knn_adj_mat(t_feats_chunks[i])
+                        t_adjs.append(c_adj)
+                self.txt_adjs= t_adjs
+
             t_d_feats = []
-            t_adjs = []
-            # multi-relation graph learning
-            for i in range(self.n_aspects):
-                c_adj = self.get_knn_adj_mat(t_feats_chunks[i])
-                t_adjs.append(c_adj)
-                h = self.item_id_embedding.weight
-                for i in range(self.n_mm_layers):
-                    h = torch.sparse.mm(c_adj, h)
-                t_d_feats.append(h)
+            for c_adj in self.txt_adjs:
+                i_t_emb = self.get_mm_embs(c_adj, self.item_id_embedding.weight)
+                t_d_feats.append(i_t_emb)
+                
             t_d_feats = torch.stack(t_d_feats, dim=1)
-            self.t_ms_adjs= t_adjs
         
         if self.v_feat is not None:
             # # local semantic extraction
-            v_feats_chunks = torch.matmul(self.trans_windows(self.image_embedding.weight).permute(1, 0, 2), self.disen_v)
+            if self.img_adjs is None:
+                print('****************construct image adj********************')
+                v_feats_chunks = torch.matmul(self.trans_windows(self.image_embedding.weight).permute(1, 0, 2), self.disen_v)
+                # v_feats_chunks = self.trans_windows(self.image_embedding.weight).permute(1, 0, 2)
+                v_adjs = []
+                # multi-relation graph learning
+                with torch.no_grad():
+                    for i in range(self.n_aspects):
+                        c_adj = self.get_knn_adj_mat(v_feats_chunks[i])
+                        v_adjs.append(c_adj)
+                self.img_adjs=v_adjs
+
             v_d_feats = []
-            v_adjs = []
-            # multi-relation graph learning
-            for i in range(self.n_aspects):
-                c_adj = self.get_knn_adj_mat(v_feats_chunks[i])
-                v_adjs.append(c_adj)
-                h = self.item_id_embedding.weight
-                for i in range(self.n_mm_layers):
-                    h = torch.sparse.mm(c_adj, h)
-                v_d_feats.append(h)
+            for c_adj in self.img_adjs:
+                i_v_emb = self.get_mm_embs(c_adj, self.item_id_embedding.weight)
+                v_d_feats.append(i_v_emb)
+
             v_d_feats = torch.stack(v_d_feats, dim=1)
-            self.v_ms_adjs=v_adjs
         
         # Inter-modal Multi-semantic Mapping and lignment
         if self.v_feat is not None and self.t_feat is not None:
             # inter-modal semantic mapping
-            tv_w = (t_d_feats @ v_d_feats.permute(0, 2, 1)) / self.dim_sqrt
+            tv_w = (t_d_feats @ v_d_feats.permute(0, 2, 1))
             t_v_w = torch.softmax(tv_w, dim=2)
             self.t_v_att = t_v_w
             v_a_feats = t_v_w @ v_d_feats
@@ -199,28 +238,32 @@ class FIMRec(GeneralRecommender):
             t_s_feats = t_d_feats + v_a_feats
             t_weight = F.softmax(self.item_t_weight, dim=1)
             t_f_feats = t_weight * t_s_feats
+            # t_f_feats = t_s_feats
 
             v_s_feats = v_d_feats + t_a_feats
             v_weight = F.softmax(self.item_v_weight, dim=1)
             v_f_feats = v_weight * v_s_feats
+            # v_f_feats = v_s_feats
+
+            t_f_feats = t_f_feats.mean(dim=1, keepdim=False)
+            v_f_feats = v_f_feats.mean(dim=1, keepdim=False)
 
             if self.mm_fuse_type == 'att':
                 i_weight = F.softmax(self.i_m_weight, dim=1)
-                mm_feats = i_weight[0][0] * v_f_feats + i_weight[0][1] * t_f_feats
+                i_m_feats = i_weight[0][0] * v_f_feats + i_weight[0][1] * t_f_feats
             if self.mm_fuse_type == 'sum':
-                mm_feats = v_f_feats + t_f_feats
+                i_m_feats = v_f_feats + t_f_feats
             if self.mm_fuse_type == 'max':
-                mm_feats = torch.maximum(v_f_feats, t_f_feats)
-
-            i_m_feats = mm_feats.mean(1)
+                i_m_feats = torch.maximum(v_f_feats, t_f_feats)
 
             u_m_feats = torch.sparse.mm(self.adj, i_m_feats) * self.num_inters[:self.n_users]
             
             # Integration with collaborative and multimodal semantics    
             ua_embeddings = u_g_embeddings + F.normalize(u_m_feats)
             ia_embeddings = i_g_embeddings + F.normalize(i_m_feats)
+            
         
-        return ua_embeddings, ia_embeddings, [v_d_feats, t_d_feats, t_a_feats, v_a_feats, i_g_embeddings, i_m_feats]
+        return ua_embeddings, ia_embeddings, [v_d_feats, t_d_feats, t_a_feats, v_a_feats, u_g_embeddings, i_g_embeddings, u_m_feats, i_m_feats]
 
     def calculate_loss(self, interaction):
         users = interaction[0]
@@ -228,10 +271,11 @@ class FIMRec(GeneralRecommender):
         neg_items = interaction[2]
 
         u_embs, i_embs, mm_feats = self.forward()
-        v_d_feats, t_d_feats, t_a_feats, v_a_feats, i_g_embs, m_feats = mm_feats
+        v_d_feats, t_d_feats, t_a_feats, v_a_feats, u_g_embs, i_g_embs, u_m_feats, i_m_feats = mm_feats
 
         # bpr loss
         batch_bpr_loss = self.bpr_loss(u_embs[users], i_embs[pos_items], i_embs[neg_items])
+        batch_bpr_loss+=((1 - F.cosine_similarity(u_embs[users], i_g_embs[pos_items], dim=-1).mean()) + (1 - F.cosine_similarity(u_embs[users], i_m_feats[pos_items], dim=-1).mean())) * self.uia_weight
 
         # alignment loss
         c_loss = 0.0
@@ -243,8 +287,8 @@ class FIMRec(GeneralRecommender):
         c_loss += self.ssl_triple_loss(t_a_feats[pos_items].permute(1, 0, 2), v_d_feats[pos_items].permute(1, 0, 2))
 
         # id-mm self-supervised loss
-        c_loss += self.ssl_triple_loss(i_embs[pos_items], m_feats[pos_items])
-        c_loss += self.ssl_triple_loss(i_embs[pos_items], i_g_embs[pos_items])
+        c_loss += self.ssl_triple_loss(u_g_embs[users], u_m_feats[users])
+        c_loss += self.ssl_triple_loss(i_g_embs[pos_items], i_m_feats[pos_items])
 
         # reg loss
         batch_reg_loss = self.reg_loss(u_embs[users], i_embs[pos_items], i_embs[neg_items])
