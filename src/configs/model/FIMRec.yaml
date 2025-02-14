@@ -14,4 +14,4 @@ mm_fuse_type: [att]
 # reg_weight : [1e-03, 1e-02, 0.1, 1.0, 2.0]
 # uia_weight: [1e-03, 1e-02, 0.1, 1.0, 2.0]
 
-hyper_parameters: ["mm_fuse_type", "knn_k", "n_aspects"]
+hyper_parameters: ["mm_fuse_type", "knn_k", "n_aspects", "c_weight", "reg_weight", "uia_weight"]
