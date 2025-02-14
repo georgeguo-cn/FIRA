@@ -205,7 +205,8 @@ class Trainer(AbstractTrainer):
         for epoch_idx in range(self.start_epoch, self.epochs):
             # train
             training_start_time = time()
-            self.model.pre_epoch_processing()
+            if epoch_idx % 5 == 0:
+                self.model.pre_epoch_processing()
             train_loss, _ = self._train_epoch(train_data, epoch_idx)
             if torch.is_tensor(train_loss):
                 # get nan loss
