@@ -13,7 +13,9 @@ text_feature_file: 'text_feat.npy'
 
 field_separator: "\t"
 
-knn_k: [8] # clothing
-n_aspects: [8] # clothing
-c_weight : [0.01] # clothings
-reg_weight: [2.0] # clothing
+knn_k: [4] # microlens
+n_aspects: [32] # microlens
+c_weight : [0.01] # microlens
+reg_weight: [0.01] # microlens
+uia_weight: [0.1] # microlens
+t_interval: [7] # microlens
