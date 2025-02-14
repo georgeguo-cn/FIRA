@@ -16,3 +16,5 @@ knn_k: [8] # sports
 n_aspects: [8] # sports
 c_weight : [0.01] # sports
 reg_weight: [0.01] # sports
+uia_weight: [0.1]
+t_interval: [2] #sports
