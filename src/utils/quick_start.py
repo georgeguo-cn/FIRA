@@ -100,14 +100,4 @@ def quick_start(model, dataset, config_dict, save_model=True):
                                                                    hyper_ret[best_test_idx][0],
                                                                    dict2str(hyper_ret[best_test_idx][1]),
                                                                    dict2str(hyper_ret[best_test_idx][2])))
-    # 注意力map
-    # import numpy as np
-    # t_ms_adjs = model.t_ms_adjs
-    # for i, t_adj in enumerate(t_ms_adjs):
-    #      np.save('log/'+config['model'] + '-' + config['dataset']+'-t_adj_'+str(i), t_adj.to_dense().detach().cpu().numpy())
-    # v_ms_adjs = model.v_ms_adjs
-    # for i, v_adj in enumerate(v_ms_adjs):
-    #      np.save('log/'+config['model'] + '-' + config['dataset']+'-v_adj_'+str(i), v_adj.to_dense().detach().cpu().numpy())
-    # t_v_att = model.t_v_att
-    # np.save('log/'+config['model'] + '-' + config['dataset']+'-t_v_att', t_v_att.detach().cpu().numpy())
 
