@@ -4,7 +4,7 @@ ITEM_ID_FIELD: itemID
 
 filter_out_cod_start_users: True
 
-inter_file_name: 'clothing.inter'
+inter_file_name: 'microlens.inter'
 
 # name of features
 vision_feature_file: 'image_feat.npy'
