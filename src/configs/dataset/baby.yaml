@@ -12,7 +12,9 @@ text_feature_file: 'text_feat.npy'
 
 field_separator: "\t"
 
-knn_k: [20] # baby
-n_aspects: [64] # baby
+knn_k: [8] # baby
+n_aspects: [8] # baby
 c_weight : [0.01] # baby
 reg_weight: [0.01] # baby
+uia_weight: [0.1]
+t_interval: [6] #baby
