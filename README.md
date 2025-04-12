@@ -1,5 +1,5 @@
-# FIMRec
-Pytorch implementations for "Fine-grained Item Multi-Relation Mining for Multimodal Recommendation"  
+# FIRA
+Pytorch implementations for "Zoom-in: Multimodal Recommendation with Fine-grained Item Representation and Alignment"  
 
 ## Data  
 The interaction data is shared at `data/`.
