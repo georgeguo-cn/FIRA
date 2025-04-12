@@ -7,9 +7,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from common.abstract_recommender import GeneralRecommender
 
-class FIMRec(GeneralRecommender):
+class FIRA(GeneralRecommender):
     def __init__(self, config, dataset):
-        super(FIMRec, self).__init__(config, dataset)
+        super(FIRA, self).__init__(config, dataset)
 
         self.embedding_dim = config['embedding_size']
         self.cf_model = config['cf_model']
